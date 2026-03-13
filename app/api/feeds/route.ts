@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCategoryById } from "@/lib/feeds";
 import { fetchAllForCategory } from "@/lib/rss";
-import { getCachedArticles, upsertArticles } from "@/lib/supabase";
+import { getCachedArticles, upsertArticles, getSourcesForCategory } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -18,14 +18,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "unknown category" }, { status: 404 });
   }
 
-  // Try cache first
-  const cached = await getCachedArticles(category);
-  if (cached && cached.length > 0) {
-    return NextResponse.json({ articles: cached, source: "cache" });
+  // Try cache first (skip if force=1)
+  const force = req.nextUrl.searchParams.get("force") === "1";
+  if (!force) {
+    const cached = await getCachedArticles(category);
+    if (cached && cached.length > 0) {
+      return NextResponse.json({ articles: cached, source: "cache" });
+    }
   }
 
-  // Fetch fresh
-  const parsed = await fetchAllForCategory(config.feeds);
+  // Fetch fresh using DB sources (falls back to static config if DB has none)
+  const sources = await getSourcesForCategory(category);
+  const parsed = await fetchAllForCategory(sources);
   if (parsed.length === 0) {
     return NextResponse.json({ articles: [], source: "fresh" });
   }

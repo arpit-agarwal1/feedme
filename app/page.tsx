@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { FeedTabs } from "@/components/FeedTabs";
 import { FeedCard, FeedCardSkeleton } from "@/components/FeedCard";
+import { SourceFilterPills } from "@/components/SourceFilterPills";
 import { CATEGORIES, getCategoryById } from "@/lib/feeds";
 import type { Article } from "@/lib/supabase";
 
@@ -30,28 +31,41 @@ function Header({ onRefresh, isRefreshing }: { onRefresh: () => void; isRefreshi
             {dateStr}
           </p>
         </div>
-        <button
-          onClick={onRefresh}
-          disabled={isRefreshing}
-          className="flex items-center gap-2 px-3 py-1.5 rounded text-[12px] font-medium border border-border text-subtle hover:text-secondary hover:border-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{ fontFamily: "Inter, sans-serif" }}
-          title="Refresh current feed"
-        >
-          <svg
-            className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
+        <div className="flex items-center gap-2">
+          <a
+            href="/settings"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] font-medium border border-border text-subtle hover:text-secondary hover:border-muted transition-colors"
+            style={{ fontFamily: "Inter, sans-serif" }}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-            />
-          </svg>
-          {isRefreshing ? "Refreshing…" : "Refresh"}
-        </button>
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span className="hidden sm:inline">Settings</span>
+          </a>
+          <button
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            className="flex items-center gap-2 px-3 py-1.5 rounded text-[12px] font-medium border border-border text-subtle hover:text-secondary hover:border-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ fontFamily: "Inter, sans-serif" }}
+            title="Refresh current feed"
+          >
+            <svg
+              className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            {isRefreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
     </header>
   );
@@ -92,79 +106,93 @@ export default function FeedPage() {
   );
   const [articles, setArticles] = useState<Article[]>([]);
   const [fetchState, setFetchState] = useState<FetchState>("idle");
-  const [forceRefresh, setForceRefresh] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
 
   const activeCategory = getCategoryById(activeTab);
 
-  const load = useCallback(
-    async (tab: string, bust = false) => {
-      setFetchState("loading");
-      setArticles([]);
+  const load = useCallback(async (tab: string, force = false) => {
+    setFetchState("loading");
+    setArticles([]);
 
-      try {
-        const url = `/api/feeds?category=${tab}${bust ? `&bust=${Date.now()}` : ""}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        setArticles(json.articles ?? []);
-        setFetchState("loaded");
-      } catch {
-        setFetchState("error");
-      }
-    },
-    []
-  );
+    try {
+      const url = `/api/feeds?category=${tab}${force ? `&force=1&bust=${Date.now()}` : ""}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setArticles(json.articles ?? []);
+      setFetchState("loaded");
+    } catch {
+      setFetchState("error");
+    }
+  }, []);
 
-  // Load when tab changes
   useEffect(() => {
     load(activeTab);
     localStorage.setItem(STORAGE_KEY, activeTab);
   }, [activeTab, load]);
 
-  // Force refresh (bypass cache by deleting cached articles would need backend support;
-  // here we just reload and Supabase TTL governs freshness — or we hit /api/refresh)
   const handleRefresh = async () => {
-    setForceRefresh(true);
+    setIsRefreshing(true);
     await load(activeTab, true);
-    setForceRefresh(false);
+    setIsRefreshing(false);
   };
 
   const handleTabChange = (id: string) => {
     setActiveTab(id);
+    setActiveFilters(new Set());
   };
+
+  const handleToggleFilter = (source: string) => {
+    setActiveFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(source)) {
+        next.delete(source);
+      } else {
+        next.add(source);
+      }
+      return next;
+    });
+  };
+
+  const availableSources = useMemo(
+    () => Array.from(new Set(articles.map((a) => a.source))).sort(),
+    [articles]
+  );
+
+  const visibleArticles = useMemo(
+    () => (activeFilters.size === 0 ? articles : articles.filter((a) => activeFilters.has(a.source))),
+    [articles, activeFilters]
+  );
 
   return (
     <div className="min-h-screen bg-bg">
-      <Header onRefresh={handleRefresh} isRefreshing={forceRefresh} />
+      <Header onRefresh={handleRefresh} isRefreshing={isRefreshing} />
       <FeedTabs active={activeTab} onChange={handleTabChange} />
 
       <main className="max-w-7xl mx-auto px-4 md:px-8 py-8">
-        {/* Category title + article count */}
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h2 className="font-serif text-xl font-semibold text-primary">
-              {activeCategory?.label}
-            </h2>
-            {fetchState === "loaded" && articles.length > 0 && (
-              <p className="text-[12px] text-subtle mt-0.5" style={{ fontFamily: "Inter, sans-serif" }}>
-                {articles.length} article{articles.length !== 1 ? "s" : ""}
-              </p>
-            )}
+        {/* Category title + source filters */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="font-serif text-xl font-semibold text-primary">
+                {activeCategory?.label}
+              </h2>
+              {fetchState === "loaded" && (
+                <p className="text-[12px] text-subtle mt-0.5" style={{ fontFamily: "Inter, sans-serif" }}>
+                  {visibleArticles.length}{activeFilters.size > 0 ? ` of ${articles.length}` : ""} article{visibleArticles.length !== 1 ? "s" : ""}
+                </p>
+              )}
+            </div>
           </div>
 
-          {/* Category source pills */}
-          {fetchState !== "loading" && activeCategory && (
-            <div className="hidden md:flex flex-wrap gap-1.5 justify-end max-w-sm">
-              {activeCategory.feeds.map((f) => (
-                <span
-                  key={f.name}
-                  className={`text-[10px] px-2 py-0.5 rounded border ${activeCategory.borderAccent} ${activeCategory.textAccent} opacity-60`}
-                  style={{ fontFamily: "Inter, sans-serif" }}
-                >
-                  {f.name}
-                </span>
-              ))}
-            </div>
+          {fetchState === "loaded" && activeCategory && availableSources.length > 0 && (
+            <SourceFilterPills
+              sources={availableSources}
+              active={activeFilters}
+              onToggle={handleToggleFilter}
+              category={activeCategory}
+            />
           )}
         </div>
 
@@ -173,7 +201,7 @@ export default function FeedPage() {
           {fetchState === "loading" &&
             Array.from({ length: 12 }).map((_, i) => <FeedCardSkeleton key={i} />)}
 
-          {fetchState === "loaded" && articles.length === 0 && (
+          {fetchState === "loaded" && visibleArticles.length === 0 && (
             <EmptyState category={activeTab} />
           )}
 
@@ -181,19 +209,18 @@ export default function FeedPage() {
 
           {fetchState === "loaded" &&
             activeCategory &&
-            articles.map((article) => (
+            visibleArticles.map((article) => (
               <FeedCard key={article.id ?? article.link} article={article} category={activeCategory} />
             ))}
         </div>
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-border mt-16 py-8">
         <div
           className="max-w-7xl mx-auto px-4 md:px-8 flex items-center justify-between text-[11px] text-subtle"
           style={{ fontFamily: "Inter, sans-serif" }}
         >
-          <span>Daily Feed · Refreshes every 6 hours · Morning digest at 7:30 AM</span>
+          <span>Daily Feed · Refreshes daily · Morning digest at 2 AM</span>
           <span className="hidden md:block">
             {CATEGORIES.length} categories · {CATEGORIES.reduce((a, c) => a + c.feeds.length, 0)} sources
           </span>

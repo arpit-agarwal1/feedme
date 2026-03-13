@@ -1,4 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { getCategoryById } from "./feeds";
+import type { FeedSource } from "./feeds";
 
 export interface Article {
   id: string;
@@ -10,6 +12,15 @@ export interface Article {
   source: string;
   image_url: string | null;
   fetched_at: string;
+}
+
+export interface FeedSourceRow {
+  id: string;
+  category: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  created_at: string;
 }
 
 // Lazy singletons — only initialized on first request, never at build time
@@ -89,4 +100,84 @@ export async function getRecentArticlesForDigest(): Promise<Record<string, Artic
     }
   }
   return grouped;
+}
+
+// --- Feed Sources ---
+
+export async function getSourcesForCategory(category: string): Promise<FeedSource[]> {
+  const db = getAnonClient();
+  const { data, error } = await db
+    .from("feed_sources")
+    .select("name, url")
+    .eq("category", category)
+    .eq("enabled", true)
+    .order("name");
+
+  if (error || !data || data.length === 0) {
+    // Fall back to static config
+    return getCategoryById(category)?.feeds ?? [];
+  }
+  return data as FeedSource[];
+}
+
+export async function getAllFeedSources(): Promise<FeedSourceRow[]> {
+  const db = getAnonClient();
+  const { data, error } = await db
+    .from("feed_sources")
+    .select("*")
+    .order("category")
+    .order("name");
+
+  if (error) throw error;
+  return (data ?? []) as FeedSourceRow[];
+}
+
+export async function addFeedSource(
+  source: Omit<FeedSourceRow, "id" | "created_at">
+): Promise<FeedSourceRow> {
+  const db = getAdminClient();
+  const { data, error } = await db
+    .from("feed_sources")
+    .insert(source)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as FeedSourceRow;
+}
+
+export async function updateFeedSource(
+  id: string,
+  updates: Partial<Pick<FeedSourceRow, "name" | "url" | "enabled">>
+): Promise<FeedSourceRow> {
+  const db = getAdminClient();
+  const { data, error } = await db
+    .from("feed_sources")
+    .update(updates)
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as FeedSourceRow;
+}
+
+export async function deleteFeedSource(id: string): Promise<string> {
+  const db = getAdminClient();
+  // Fetch category before deleting so we can bust the cache
+  const { data: row } = await db
+    .from("feed_sources")
+    .select("category")
+    .eq("id", id)
+    .single();
+
+  const { error } = await db.from("feed_sources").delete().eq("id", id);
+  if (error) throw error;
+  return (row as FeedSourceRow)?.category ?? "";
+}
+
+export async function deleteArticlesForCategory(category: string): Promise<void> {
+  const db = getAdminClient();
+  const { error } = await db.from("articles").delete().eq("category", category);
+  if (error) throw error;
 }

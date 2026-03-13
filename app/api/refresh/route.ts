@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CATEGORIES } from "@/lib/feeds";
 import { fetchAllForCategory } from "@/lib/rss";
-import { upsertArticles } from "@/lib/supabase";
+import { upsertArticles, getSourcesForCategory } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -21,7 +21,8 @@ export async function GET(req: NextRequest) {
 
   await Promise.allSettled(
     CATEGORIES.map(async (cat) => {
-      const articles = await fetchAllForCategory(cat.feeds);
+      const sources = await getSourcesForCategory(cat.id);
+      const articles = await fetchAllForCategory(sources);
       if (articles.length > 0) {
         await upsertArticles(cat.id, articles);
         results[cat.id] = articles.length;
