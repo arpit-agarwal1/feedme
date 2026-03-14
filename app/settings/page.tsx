@@ -1,16 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { CATEGORIES } from "@/lib/feeds";
 import type { FeedSourceRow } from "@/lib/supabase";
 
 function twitterHandleToRssUrl(handle: string): string {
   const clean = handle.replace(/^@/, "").trim();
   return `https://rsshub.app/twitter/user/${clean}`;
-}
-
-function isTwitterRssUrl(url: string): boolean {
-  return url.includes("rsshub.app/twitter/user/");
 }
 
 function twitterHandleFromUrl(url: string): string {
@@ -21,20 +17,27 @@ function twitterHandleFromUrl(url: string): string {
 export default function SettingsPage() {
   const [selectedCategory, setSelectedCategory] = useState("news");
   const [sources, setSources] = useState<FeedSourceRow[]>([]);
+  const [twitterSources, setTwitterSources] = useState<FeedSourceRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
 
-  // Add RSS source form
-  const [addName, setAddName] = useState("");
+  // Add RSS form
   const [addUrl, setAddUrl] = useState("");
+  const [addName, setAddName] = useState("");
+  const [fetchingName, setFetchingName] = useState(false);
   const [addError, setAddError] = useState("");
-  const [addMode, setAddMode] = useState<"rss" | "twitter">("rss");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Twitter handle form
+  // Add Twitter form
   const [twitterHandle, setTwitterHandle] = useState("");
-  const [twitterCategory, setTwitterCategory] = useState("news");
+  const [twitterError, setTwitterError] = useState("");
 
   const [notice, setNotice] = useState("");
+
+  const showNotice = (msg: string) => {
+    setNotice(msg);
+    setTimeout(() => setNotice(""), 3500);
+  };
 
   const fetchSources = useCallback(async (category: string) => {
     setLoading(true);
@@ -47,16 +50,40 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchTwitterSources = useCallback(async () => {
+    const res = await fetch(`/api/settings/sources?category=twitter`);
+    const json = await res.json();
+    setTwitterSources(json.sources ?? []);
+  }, []);
+
   useEffect(() => {
     fetchSources(selectedCategory);
   }, [selectedCategory, fetchSources]);
 
-  const showNotice = (msg: string) => {
-    setNotice(msg);
-    setTimeout(() => setNotice(""), 3000);
-  };
+  useEffect(() => {
+    fetchTwitterSources();
+  }, [fetchTwitterSources]);
 
-  const handleToggle = async (source: FeedSourceRow) => {
+  // Auto-fetch feed name when URL changes
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!addUrl) { setAddName(""); return; }
+
+    try { new URL(addUrl); } catch { return; }
+
+    debounceRef.current = setTimeout(async () => {
+      setFetchingName(true);
+      try {
+        const res = await fetch(`/api/settings/sources/preview?url=${encodeURIComponent(addUrl)}`);
+        const json = await res.json();
+        if (json.title) setAddName(json.title);
+      } finally {
+        setFetchingName(false);
+      }
+    }, 600);
+  }, [addUrl]);
+
+  const handleToggle = async (source: FeedSourceRow, isTwitter = false) => {
     setSaving(source.id);
     try {
       await fetch(`/api/settings/sources/${source.id}`, {
@@ -64,22 +91,25 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: !source.enabled, category: source.category }),
       });
-      setSources((prev) =>
-        prev.map((s) => (s.id === source.id ? { ...s, enabled: !s.enabled } : s))
-      );
-      showNotice("Saved · Refresh the feed to see changes");
+      const updater = (prev: FeedSourceRow[]) =>
+        prev.map((s) => (s.id === source.id ? { ...s, enabled: !s.enabled } : s));
+      if (isTwitter) setTwitterSources(updater);
+      else setSources(updater);
+      showNotice("Saved · Hit Refresh on the feed to see changes");
     } finally {
       setSaving(null);
     }
   };
 
-  const handleDelete = async (source: FeedSourceRow) => {
+  const handleDelete = async (source: FeedSourceRow, isTwitter = false) => {
     if (!confirm(`Remove "${source.name}"?`)) return;
     setSaving(source.id);
     try {
       await fetch(`/api/settings/sources/${source.id}`, { method: "DELETE" });
-      setSources((prev) => prev.filter((s) => s.id !== source.id));
-      showNotice("Removed · Refresh the feed to see changes");
+      const remover = (prev: FeedSourceRow[]) => prev.filter((s) => s.id !== source.id);
+      if (isTwitter) setTwitterSources(remover);
+      else setSources(remover);
+      showNotice("Removed · Hit Refresh on the feed to see changes");
     } finally {
       setSaving(null);
     }
@@ -88,13 +118,10 @@ export default function SettingsPage() {
   const handleAddRss = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddError("");
-    try {
-      new URL(addUrl);
-    } catch {
-      setAddError("Enter a valid URL");
-      return;
-    }
-    setSaving("add");
+    try { new URL(addUrl); } catch { setAddError("Enter a valid URL"); return; }
+    if (!addName.trim()) { setAddError("Enter a name for this source"); return; }
+
+    setSaving("add-rss");
     try {
       const res = await fetch("/api/settings/sources", {
         method: "POST",
@@ -103,12 +130,10 @@ export default function SettingsPage() {
       });
       const json = await res.json();
       if (!res.ok) { setAddError(json.error ?? "Failed to add"); return; }
-      if (json.source.category === selectedCategory) {
-        setSources((prev) => [...prev, json.source]);
-      }
-      setAddName("");
+      if (json.source.category === selectedCategory) setSources((prev) => [...prev, json.source]);
       setAddUrl("");
-      showNotice("Added · Refresh the feed to see articles");
+      setAddName("");
+      showNotice("Added · Hit Refresh on the feed to see articles");
     } finally {
       setSaving(null);
     }
@@ -116,35 +141,36 @@ export default function SettingsPage() {
 
   const handleAddTwitter = async (e: React.FormEvent) => {
     e.preventDefault();
-    setAddError("");
+    setTwitterError("");
     const handle = twitterHandle.replace(/^@/, "").trim();
-    if (!handle) { setAddError("Enter a Twitter handle"); return; }
-    const url = twitterHandleToRssUrl(handle);
-    const name = `@${handle}`;
-    setSaving("add");
+    if (!handle) { setTwitterError("Enter a handle"); return; }
+
+    setSaving("add-twitter");
     try {
       const res = await fetch("/api/settings/sources", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category: twitterCategory, name, url }),
+        body: JSON.stringify({
+          category: "twitter",
+          name: `@${handle}`,
+          url: twitterHandleToRssUrl(handle),
+        }),
       });
       const json = await res.json();
-      if (!res.ok) { setAddError(json.error ?? "Failed to add"); return; }
-      if (json.source.category === selectedCategory) {
-        setSources((prev) => [...prev, json.source]);
-      }
+      if (!res.ok) { setTwitterError(json.error ?? "Failed to add"); return; }
+      setTwitterSources((prev) => [...prev, json.source]);
       setTwitterHandle("");
-      showNotice(`Added @${handle} to ${CATEGORIES.find(c => c.id === twitterCategory)?.label} · Refresh to see tweets`);
+      showNotice(`Added @${handle}`);
     } finally {
       setSaving(null);
     }
   };
 
+  const feedCategories = CATEGORIES.filter((c) => c.id !== "twitter");
   const cat = CATEGORIES.find((c) => c.id === selectedCategory);
 
   return (
     <div className="min-h-screen bg-bg">
-      {/* Header */}
       <header className="border-b border-border bg-bg">
         <div className="max-w-3xl mx-auto px-4 md:px-8 py-5 flex items-center justify-between">
           <div>
@@ -166,47 +192,55 @@ export default function SettingsPage() {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 md:px-8 py-8 space-y-8">
+      <main className="max-w-3xl mx-auto px-4 md:px-8 py-8 space-y-10">
 
         {/* Twitter section */}
-        <section className="bg-surface border border-border rounded-lg p-5">
-          <h2 className="font-serif text-lg font-semibold text-primary mb-1">Twitter / X Feeds</h2>
+        <section>
+          <h2 className="font-serif text-lg font-semibold text-primary mb-1">Twitter</h2>
           <p className="text-[12px] text-subtle mb-4" style={{ fontFamily: "Inter, sans-serif" }}>
-            Follow any public Twitter account via RSSHub. Tweets appear as articles in the category you choose.
+            Follow public accounts via RSSHub. Tweets appear in the Twitter tab.
           </p>
-          <form onSubmit={handleAddTwitter} className="space-y-3">
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <input
-                  type="text"
-                  placeholder="@handle or username"
-                  value={twitterHandle}
-                  onChange={(e) => setTwitterHandle(e.target.value)}
-                  className="w-full bg-bg border border-border rounded px-3 py-2 text-[13px] text-primary placeholder:text-subtle focus:outline-none focus:border-muted transition-colors"
-                  style={{ fontFamily: "Inter, sans-serif" }}
-                />
-              </div>
-              <select
-                value={twitterCategory}
-                onChange={(e) => setTwitterCategory(e.target.value)}
-                className="bg-bg border border-border rounded px-3 py-2 text-[13px] text-primary focus:outline-none focus:border-muted transition-colors"
-                style={{ fontFamily: "Inter, sans-serif" }}
-              >
-                {CATEGORIES.map((c) => (
-                  <option key={c.id} value={c.id}>{c.label}</option>
+
+          {/* Twitter sources list */}
+          {twitterSources.length > 0 && (
+            <div className="bg-surface border border-border rounded-lg overflow-hidden mb-4">
+              <ul className="divide-y divide-border">
+                {twitterSources.map((source) => (
+                  <SourceRow
+                    key={source.id}
+                    source={{ ...source, name: twitterHandleFromUrl(source.url) }}
+                    saving={saving === source.id}
+                    catColor="sky"
+                    onToggle={() => handleToggle(source, true)}
+                    onDelete={() => handleDelete(source, true)}
+                  />
                 ))}
-              </select>
+              </ul>
+            </div>
+          )}
+
+          {/* Add Twitter handle form */}
+          <form onSubmit={handleAddTwitter} className="bg-surface border border-border rounded-lg p-4">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="@handle"
+                value={twitterHandle}
+                onChange={(e) => setTwitterHandle(e.target.value)}
+                className="flex-1 bg-bg border border-border rounded px-3 py-2 text-[13px] text-primary placeholder:text-subtle focus:outline-none focus:border-muted transition-colors"
+                style={{ fontFamily: "Inter, sans-serif" }}
+              />
               <button
                 type="submit"
-                disabled={saving === "add"}
-                className="px-4 py-2 rounded text-[12px] font-medium bg-surface border border-border text-primary hover:border-muted transition-colors disabled:opacity-40"
+                disabled={saving === "add-twitter"}
+                className="px-4 py-2 rounded text-[12px] font-medium border border-border text-primary hover:border-muted transition-colors disabled:opacity-40"
                 style={{ fontFamily: "Inter, sans-serif" }}
               >
-                Add
+                {saving === "add-twitter" ? "Adding…" : "Add"}
               </button>
             </div>
-            {addMode === "twitter" && addError && (
-              <p className="text-[11px] text-red-400" style={{ fontFamily: "Inter, sans-serif" }}>{addError}</p>
+            {twitterError && (
+              <p className="text-[11px] text-red-400 mt-2" style={{ fontFamily: "Inter, sans-serif" }}>{twitterError}</p>
             )}
           </form>
         </section>
@@ -217,7 +251,7 @@ export default function SettingsPage() {
 
           {/* Category picker */}
           <div className="flex flex-wrap gap-2 mb-5">
-            {CATEGORIES.map((c) => (
+            {feedCategories.map((c) => (
               <button
                 key={c.id}
                 onClick={() => setSelectedCategory(c.id)}
@@ -246,78 +280,46 @@ export default function SettingsPage() {
             ) : (
               <ul className="divide-y divide-border">
                 {sources.map((source) => (
-                  <li key={source.id} className={`flex items-center gap-3 px-5 py-3.5 ${saving === source.id ? "opacity-50" : ""}`}>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        {isTwitterRssUrl(source.url) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg border border-border text-subtle" style={{ fontFamily: "Inter, sans-serif" }}>
-                            X
-                          </span>
-                        )}
-                        <span className={`text-[13px] font-medium ${source.enabled ? "text-primary" : "text-subtle line-through"}`} style={{ fontFamily: "Inter, sans-serif" }}>
-                          {isTwitterRssUrl(source.url) ? twitterHandleFromUrl(source.url) : source.name}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-subtle mt-0.5 truncate" style={{ fontFamily: "Inter, sans-serif" }}>
-                        {source.url}
-                      </p>
-                    </div>
-
-                    {/* Toggle */}
-                    <button
-                      onClick={() => handleToggle(source)}
-                      disabled={saving === source.id}
-                      className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${source.enabled ? `${cat ? getToggleColor(cat.color) : "bg-zinc-600"}` : "bg-zinc-700"}`}
-                      title={source.enabled ? "Disable" : "Enable"}
-                    >
-                      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${source.enabled ? "translate-x-4" : "translate-x-0.5"}`} />
-                    </button>
-
-                    {/* Delete */}
-                    <button
-                      onClick={() => handleDelete(source)}
-                      disabled={saving === source.id}
-                      className="text-subtle hover:text-red-400 transition-colors flex-shrink-0"
-                      title="Remove source"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </li>
+                  <SourceRow
+                    key={source.id}
+                    source={source}
+                    saving={saving === source.id}
+                    catColor={cat?.color ?? "blue"}
+                    onToggle={() => handleToggle(source)}
+                    onDelete={() => handleDelete(source)}
+                  />
                 ))}
               </ul>
             )}
           </div>
 
-          {/* Add RSS source */}
+          {/* Add RSS feed form */}
           <div className="bg-surface border border-border rounded-lg p-5">
-            <div className="flex gap-3 mb-4">
-              <button
-                onClick={() => { setAddMode("rss"); setAddError(""); }}
-                className={`text-[12px] font-medium px-3 py-1.5 rounded border transition-colors ${addMode === "rss" ? "border-muted text-primary" : "border-border text-subtle hover:border-muted"}`}
-                style={{ fontFamily: "Inter, sans-serif" }}
-              >
-                Add RSS feed
-              </button>
-            </div>
-
+            <p className="text-[12px] text-subtle mb-3" style={{ fontFamily: "Inter, sans-serif" }}>
+              Add RSS feed to <span className="text-primary">{cat?.label}</span>
+            </p>
             <form onSubmit={handleAddRss} className="space-y-2">
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="RSS URL"
+                  value={addUrl}
+                  onChange={(e) => { setAddUrl(e.target.value); setAddError(""); }}
+                  className="w-full bg-bg border border-border rounded px-3 py-2 text-[13px] text-primary placeholder:text-subtle focus:outline-none focus:border-muted transition-colors pr-8"
+                  style={{ fontFamily: "Inter, sans-serif" }}
+                />
+                {fetchingName && (
+                  <svg className="absolute right-2.5 top-2.5 w-4 h-4 text-subtle animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                )}
+              </div>
               <input
                 type="text"
-                placeholder="Source name (e.g. Hacker News)"
+                placeholder="Source name"
                 value={addName}
                 onChange={(e) => setAddName(e.target.value)}
-                required
-                className="w-full bg-bg border border-border rounded px-3 py-2 text-[13px] text-primary placeholder:text-subtle focus:outline-none focus:border-muted transition-colors"
-                style={{ fontFamily: "Inter, sans-serif" }}
-              />
-              <input
-                type="text"
-                placeholder="RSS URL (e.g. https://news.ycombinator.com/rss)"
-                value={addUrl}
-                onChange={(e) => setAddUrl(e.target.value)}
-                required
                 className="w-full bg-bg border border-border rounded px-3 py-2 text-[13px] text-primary placeholder:text-subtle focus:outline-none focus:border-muted transition-colors"
                 style={{ fontFamily: "Inter, sans-serif" }}
               />
@@ -326,21 +328,21 @@ export default function SettingsPage() {
               )}
               <button
                 type="submit"
-                disabled={saving === "add"}
+                disabled={saving === "add-rss" || fetchingName}
                 className="px-4 py-2 rounded text-[12px] font-medium border border-border text-primary hover:border-muted transition-colors disabled:opacity-40"
                 style={{ fontFamily: "Inter, sans-serif" }}
               >
-                {saving === "add" ? "Adding…" : `Add to ${cat?.label ?? "category"}`}
+                {saving === "add-rss" ? "Adding…" : "Add source"}
               </button>
             </form>
           </div>
         </section>
       </main>
 
-      {/* Toast notice */}
+      {/* Toast */}
       {notice && (
         <div
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-surface border border-border px-4 py-2.5 rounded-lg text-[12px] text-primary shadow-lg z-50"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-surface border border-border px-4 py-2.5 rounded-lg text-[12px] text-primary shadow-lg z-50 whitespace-nowrap"
           style={{ fontFamily: "Inter, sans-serif" }}
         >
           {notice}
@@ -350,15 +352,59 @@ export default function SettingsPage() {
   );
 }
 
+function SourceRow({
+  source,
+  saving,
+  catColor,
+  onToggle,
+  onDelete,
+}: {
+  source: FeedSourceRow;
+  saving: boolean;
+  catColor: string;
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <li className={`flex items-center gap-3 px-5 py-3.5 ${saving ? "opacity-50" : ""}`}>
+      <div className="flex-1 min-w-0">
+        <span
+          className={`text-[13px] font-medium ${source.enabled ? "text-primary" : "text-subtle line-through"}`}
+          style={{ fontFamily: "Inter, sans-serif" }}
+        >
+          {source.name}
+        </span>
+        <p className="text-[11px] text-subtle mt-0.5 truncate" style={{ fontFamily: "Inter, sans-serif" }}>
+          {source.url}
+        </p>
+      </div>
+      <button
+        onClick={onToggle}
+        disabled={saving}
+        className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${source.enabled ? getToggleColor(catColor) : "bg-zinc-700"}`}
+        title={source.enabled ? "Disable" : "Enable"}
+      >
+        <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${source.enabled ? "translate-x-4" : "translate-x-0.5"}`} />
+      </button>
+      <button
+        onClick={onDelete}
+        disabled={saving}
+        className="text-subtle hover:text-red-400 transition-colors flex-shrink-0"
+        title="Remove"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+      </button>
+    </li>
+  );
+}
+
 function getToggleColor(color: string): string {
   const map: Record<string, string> = {
-    blue: "bg-blue-500",
-    emerald: "bg-emerald-500",
-    violet: "bg-violet-500",
-    orange: "bg-orange-500",
-    pink: "bg-pink-500",
-    amber: "bg-amber-500",
-    rose: "bg-rose-500",
+    blue: "bg-blue-500", emerald: "bg-emerald-500", violet: "bg-violet-500",
+    orange: "bg-orange-500", pink: "bg-pink-500", amber: "bg-amber-500",
+    rose: "bg-rose-500", sky: "bg-sky-500",
   };
   return map[color] ?? "bg-zinc-500";
 }

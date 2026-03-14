@@ -16,6 +16,7 @@ const DOT_COLORS: Record<string, string> = {
   pink: "bg-pink-400",
   amber: "bg-amber-400",
   rose: "bg-rose-400",
+  sky: "bg-sky-400",
 };
 
 const UNDERLINE_COLORS: Record<string, string> = {
@@ -26,6 +27,7 @@ const UNDERLINE_COLORS: Record<string, string> = {
   pink: "border-pink-400",
   amber: "border-amber-400",
   rose: "border-rose-400",
+  sky: "border-sky-400",
 };
 
 const LEFT_BORDER_COLORS: Record<string, string> = {
@@ -36,6 +38,7 @@ const LEFT_BORDER_COLORS: Record<string, string> = {
   pink: "border-pink-400 text-pink-400",
   amber: "border-amber-400 text-amber-400",
   rose: "border-rose-400 text-rose-400",
+  sky: "border-sky-400 text-sky-400",
 };
 
 export function FeedTabs({ active, onChange }: Props) {

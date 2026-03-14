@@ -122,6 +122,16 @@ export const CATEGORIES: CategoryConfig[] = [
       { name: "Food52", url: "https://food52.com/blog/feed" },
     ],
   },
+  {
+    id: "twitter",
+    label: "Twitter",
+    color: "sky",
+    accent: "bg-sky-950",
+    textAccent: "text-sky-400",
+    borderAccent: "border-sky-800",
+    summaryLength: "short",
+    feeds: [],
+  },
 ];
 
 export function getCategoryById(id: string): CategoryConfig | undefined {
